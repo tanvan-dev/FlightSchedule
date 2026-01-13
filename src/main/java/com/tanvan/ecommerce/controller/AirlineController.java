@@ -2,6 +2,7 @@ package com.tanvan.ecommerce.controller;
 
 import com.tanvan.ecommerce.entity.Airline;
 import com.tanvan.ecommerce.services.AirlineService;
+import com.tanvan.ecommerce.services.SimpleService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,14 +15,21 @@ import java.util.Map;
 public class AirlineController {
 
     private final AirlineService airlineService;
+    private final SimpleService simpleService;
 
-    public AirlineController(AirlineService airlineService) {
+    public AirlineController(AirlineService airlineService, SimpleService simpleService) {
         this.airlineService = airlineService;
+        this.simpleService = simpleService;
     }
 
     @GetMapping
     public ResponseEntity<Map<String, List<Airline>>> getFlights(@RequestParam String iata) {
         return ResponseEntity.ok(airlineService.fetchAndSaveAllFlights(iata));
+    }
+
+    @GetMapping("/all")
+    public Map<String, List<Airline>> getAll(@RequestParam String iata) {
+        return simpleService.getAllFlights(iata);
     }
 
     @GetMapping("/cached")

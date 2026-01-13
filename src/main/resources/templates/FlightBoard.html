@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flight Board</title>
+    <link rel="stylesheet" href="../static/FlightBoard.css">
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <input type="text" class="iata" placeholder="Enter Airport IATA (e.g., SFO, JFK)" id="iataInput" maxlength="3">
+
+        <button class="refresh-btn" id="refreshBtn">
+            🔄 Refresh
+        </button>
+    </div>
+
+    <div id="errorMessage" class="error-message" style="display: none;"></div>
+
+    <div class="boards-container">
+        <!-- Arrivals Board -->
+        <div class="board">
+            <div class="board-header">
+                <div class="status-dots">
+                    <span class="dot red"></span>
+                    <span class="dot yellow"></span>
+                    <span class="dot green"></span>
+                </div>
+                <span>🛬 Arrivals <span id="arrivalsIata"></span></span>
+                <span class="count" id="arrivalsCount">(0)</span>
+            </div>
+
+            <table>
+                <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Carrier</th>
+                    <th>Flight</th>
+                    <th>Origin</th>
+                    <th>Status</th>
+                </tr>
+                </thead>
+                <tbody id="arrivalsTable">
+                <tr>
+                    <td colspan="5" class="no-data">No arrivals data available</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Departures Board -->
+        <div class="board">
+            <div class="board-header">
+                <div class="status-dots">
+                    <span class="dot red"></span>
+                    <span class="dot yellow"></span>
+                    <span class="dot green"></span>
+                </div>
+                <span>🛫 Departures <span id="departuresIata"></span></span>
+                <span class="count" id="departuresCount">(0)</span>
+            </div>
+
+            <table>
+                <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Carrier</th>
+                    <th>Flight</th>
+                    <th>Destination</th>
+                    <th>Status</th>
+                </tr>
+                </thead>
+                <tbody id="departuresTable">
+                <tr>
+                    <td colspan="5" class="no-data">No departures data available</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Info Footer -->
+    <div class="footer">
+        <p>💡 Auto-refresh every 30 minutes</p>
+        <p>🔄 "Refresh" = Fetch latest data from external API</p>
+        <p>⚡ "Quick Load (Cache)" = Load from database (faster)</p>
+    </div>
+</div>
+
+<script>
+    // Global variables
+    let autoRefreshInterval = null;
+    let isLoading = false;
+    const BASE_URL = "http://localhost:8080/api/flights";
+
+    // DOM elements
+    const iataInput = document.getElementById('iataInput');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const errorMessage = document.getElementById('errorMessage');
+    const arrivalsTable = document.getElementById('arrivalsTable');
+    const departuresTable = document.getElementById('departuresTable');
+    const arrivalsIata = document.getElementById('arrivalsIata');
+    const departuresIata = document.getElementById('departuresIata');
+    const arrivalsCount = document.getElementById('arrivalsCount');
+    const departuresCount = document.getElementById('departuresCount');
+
+    // Event Listeners
+    iataInput.addEventListener('input', () => {
+        const iata = iataInput.value.toUpperCase();
+        arrivalsIata.textContent = iata;
+        departuresIata.textContent = iata;
+    });
+
+    iataInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            handleRefresh();
+        }
+    });
+
+    refreshBtn.addEventListener('click', handleRefresh);
+
+    // ================================
+    // ✅ FETCH BOTH ARRIVALS + DEPARTURES
+    // ================================
+    async function fetchFlights(iataCode, useCache = false) {
+        try {
+            clearError();
+
+            // Sử dụng endpoint chính hoặc cached
+            const endpoint = useCache ? `${BASE_URL}/cached` : BASE_URL;
+            const response = await fetch(`${endpoint}?iata=${iataCode}`);
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+            }
+
+            const data = await response.json();
+            console.log("✅ Fetched flights:", data);
+
+            // Backend trả về: { "arrivals": [...], "departures": [...] }
+            displayFlights(data.arrivals || [], data.departures || []);
+
+        } catch (error) {
+            console.error("❌ Error fetching flights:", error);
+            showError(error.message);
+            displayFlights([], []);
+        }
+    }
+
+    // ================================
+    // STATUS CSS
+    // ================================
+    function getStatusClass(status) {
+        if (!status) return "";
+        const s = status.toLowerCase();
+        if (s.includes('landed')) return 'landed';
+        if (s.includes('scheduled')) return 'scheduled';
+        if (s.includes('delayed')) return 'delayed';
+        if (s.includes('en-route') || s.includes('active')) return 'en-route';
+        if (s.includes('cancelled')) return 'cancelled';
+        return '';
+    }
+
+    // ================================
+    // FORMAT TIME - Cải tiến với depActual/arrActual
+    // ================================
+    function formatTime(flight, type) {
+        const isArrival = type === 'arrival';
+
+        // Lấy thời gian từ backend
+        const scheduledTime = isArrival ? flight.arrTime : flight.depTime;
+        const actualTime = isArrival ? flight.arrActual : flight.depActual;
+        const delayed = flight.delayed;
+
+        // Helper: Extract time from datetime string
+        const extractTime = (datetime) => {
+            if (!datetime) return null;
+            // Format: "2021-07-14 19:53" -> "19:53"
+            const parts = datetime.split(" ");
+            return parts[1]?.substring(0, 5);
+        };
+
+        const scheduled = extractTime(scheduledTime);
+        const actual = extractTime(actualTime);
+
+        // Nếu có actual time và khác scheduled
+        if (actual && scheduled && actual !== scheduled) {
+            return `
+                    <span class="actual-time">${actual}</span>
+                    <span class="old-time">${scheduled}</span>
+                `;
+        }
+
+        // Nếu chỉ có delayed (tính toán)
+        if (delayed && delayed > 0 && scheduled) {
+            const [h, m] = scheduled.split(':').map(Number);
+            const total = h * 60 + m + delayed;
+            const newH = String(Math.floor(total / 60) % 24).padStart(2, "0");
+            const newM = String(total % 60).padStart(2, "0");
+            const calculatedActual = `${newH}:${newM}`;
+
+            return `
+                    <span class="actual-time">${calculatedActual}</span>
+                    <span class="old-time">${scheduled}</span>
+                    <span class="delay-info">+${delayed}m</span>
+                `;
+        }
+
+        // Default: Hiển thị scheduled time
+        return scheduled || 'N/A';
+    }
+
+    // ================================
+    // DISPLAY FLIGHTS
+    // ================================
+    function displayFlights(arrivals, departures) {
+        // Update counts
+        arrivalsCount.textContent = `(${arrivals.length})`;
+        departuresCount.textContent = `(${departures.length})`;
+
+        // Display arrivals
+        if (arrivals.length === 0) {
+            arrivalsTable.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="no-data">
+                            ${isLoading ? "Loading..." : "No arrivals data available"}
+                        </td>
+                    </tr>
+                `;
+        } else {
+            let arrivalsHTML = '';
+            arrivals.forEach((flight, index) => {
+                arrivalsHTML += `
+                        <tr>
+                            <td class="time-cell">${formatTime(flight, 'arrival')}</td>
+                            <td>${flight.airlineIata || "N/A"}</td>
+                            <td class="flight-number">${flight.flightIata || flight.flightNumber || "N/A"}</td>
+                            <td>${flight.depIata || "N/A"}</td>
+                            <td class="status ${getStatusClass(flight.status)}">${flight.status || "N/A"}</td>
+                        </tr>
+                    `;
+            });
+            arrivalsTable.innerHTML = arrivalsHTML;
+        }
+
+        // Display departures
+        if (departures.length === 0) {
+            departuresTable.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="no-data">
+                            ${isLoading ? "Loading..." : "No departures data available"}
+                        </td>
+                    </tr>
+                `;
+        } else {
+            let departuresHTML = '';
+            departures.forEach((flight, index) => {
+                departuresHTML += `
+                        <tr>
+                            <td class="time-cell">${formatTime(flight, 'departure')}</td>
+                            <td>${flight.airlineIata || "N/A"}</td>
+                            <td class="flight-number">${flight.flightIata || flight.flightNumber || "N/A"}</td>
+                            <td>${flight.arrIata || "N/A"}</td>
+                            <td class="status ${getStatusClass(flight.status)}">${flight.status || "N/A"}</td>
+                        </tr>
+                    `;
+            });
+            departuresTable.innerHTML = departuresHTML;
+        }
+    }
+
+    // ================================
+    // 🔄 REFRESH BUTTON
+    // ================================
+    async function handleRefresh() {
+        const code = iataInput.value.trim();
+
+        if (code.length !== 3) {
+            showError("Please enter a valid 3-letter Airport IATA code");
+            return;
+        }
+
+        setLoading(true);
+        clearError();
+
+        try {
+            // ✅ Gọi 1 API duy nhất để lấy cả arrivals + departures
+            await fetchFlights(code);
+
+            // Start auto-refresh sau khi fetch thành công
+            startAutoRefresh();
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    // ================================
+    // ⚡ QUICK LOAD - Từ cache
+    // ================================
+    async function handleQuickLoad() {
+        const code = iataInput.value.trim();
+
+        if (code.length !== 3) {
+            showError("Please enter a valid 3-letter Airport IATA code");
+            return;
+        }
+
+        setLoading(true);
+        clearError();
+
+        try {
+            // ✅ Load từ DB cache (nhanh hơn)
+            await fetchFlights(code, true);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    // ================================
+    // ⏰ AUTO REFRESH EVERY 30 MINUTES
+    // ================================
+    function startAutoRefresh() {
+        const code = iataInput.value.trim();
+        if (code.length !== 3) return;
+
+        // Clear existing interval
+        if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+        }
+
+        // Set new interval: refresh every 30 minutes
+        autoRefreshInterval = setInterval(() => {
+            console.log("🔄 Auto-refreshing flights...");
+            fetchFlights(code);
+        }, 30 * 60 * 1000); // 30 minutes
+    }
+
+    // ================================
+    // HELPER FUNCTIONS
+    // ================================
+    function setLoading(loading) {
+        isLoading = loading;
+        refreshBtn.disabled = loading;
+        refreshBtn.innerHTML = loading ? '⏳ Loading...' : '🔄 Refresh';
+    }
+
+    function showError(message) {
+        errorMessage.textContent = `❌ ${message}`;
+        errorMessage.style.display = 'block';
+    }
+
+    function clearError() {
+        errorMessage.textContent = '';
+        errorMessage.style.display = 'none';
+    }
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+        }
+    });
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+        // Add Enter key support to input
+        iataInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                handleRefresh();
+            }
+        });
+    });
+</script>
+</body>
+</html>

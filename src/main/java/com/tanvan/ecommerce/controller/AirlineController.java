@@ -32,10 +32,10 @@ public class AirlineController {
         return simpleService.getAllFlights(iata);
     }
 
-    @GetMapping("/cached")
-    public ResponseEntity<Map<String, List<Airline>>> getCachedFlights(@RequestParam String iata) {
-        return ResponseEntity.ok(airlineService.getFlightsFromDatabase(iata));
-    }
+//    @GetMapping("/cached")
+//    public ResponseEntity<Map<String, List<Airline>>> getCachedFlights(@RequestParam String iata) {
+//        return ResponseEntity.ok(airlineService.getFlightsFromDatabase(iata));
+//    }
 
     @GetMapping("/departures")
     public ResponseEntity<List<Airline>> getDepartures(@RequestParam String iata) {
@@ -51,29 +51,29 @@ public class AirlineController {
      * ✅ CLEAR CACHE cho một airport
      * DELETE /api/flights/cache?iata=SFO
      */
-    @DeleteMapping("/cache")
-    public ResponseEntity<String> clearCache(@RequestParam String iata) {
-        airlineService.clearCache(iata);
-        return ResponseEntity.ok("Cache cleared for: " + iata);
-    }
+//    @DeleteMapping("/cache")
+//    public ResponseEntity<String> clearCache(@RequestParam String iata) {
+//        airlineService.clearCache(iata);
+//        return ResponseEntity.ok("Cache cleared for: " + iata);
+//    }
 
     /**
      * ✅ CLEAR TẤT CẢ CACHE
      * DELETE /api/flights/cache/all
      */
-    @DeleteMapping("/cache/all")
-    public ResponseEntity<String> clearAllCache() {
-        airlineService.clearAllCache();
-        return ResponseEntity.ok("All cache cleared successfully");
-    }
+//    @DeleteMapping("/cache/all")
+//    public ResponseEntity<String> clearAllCache() {
+//        airlineService.clearAllCache();
+//        return ResponseEntity.ok("All cache cleared successfully");
+//    }
 
     /**
      * ✅ FORCE REFRESH - Xóa cache và fetch lại
      * POST /api/flights/refresh?iata=SFO
      */
-    @PostMapping("/refresh")
-    public ResponseEntity<Map<String, List<Airline>>> refreshFlights(@RequestParam String iata) {
-        airlineService.clearCache(iata);
-        return ResponseEntity.ok(airlineService.fetchAndSaveAllFlights(iata));
-    }
+//    @PostMapping("/refresh")
+//    public ResponseEntity<Map<String, List<Airline>>> refreshFlights(@RequestParam String iata) {
+//        airlineService.clearCache(iata);
+//        return ResponseEntity.ok(airlineService.fetchAndSaveAllFlights(iata));
+//    }
 }

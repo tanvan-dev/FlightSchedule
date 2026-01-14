@@ -135,8 +135,8 @@
 
           // Sử dụng endpoint chính hoặc cached
           const endpoint = useCache ? `${BASE_URL}/cached` : BASE_URL;
-          //const response = await fetch(`${endpoint}?iata=${iataCode}`);
-          const response = await fetch(`${endpoint}/all?iata=${iataCode}`);
+          const response = await fetch(`${endpoint}?iata=${iataCode}`);
+          // const response = await fetch(`${endpoint}/all?iata=${iataCode}`);
 
           if (!response.ok) {
             throw new Error(

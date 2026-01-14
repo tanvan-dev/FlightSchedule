@@ -8,6 +8,8 @@ import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -32,14 +34,15 @@ public class AirlineService {
     private static final String CACHE_PREFIX = "flights:";
     private static final long CACHE_TTL = 30;
 
-    /* ===========================================================
-       PUBLIC API - Luôn trả về data sau khi sync
-    ============================================================ */
+    /*
+     * ===========================================================
+     * PUBLIC API - Luôn trả về data sau khi sync
+     * ============================================================
+     */
 
     /**
      * Fetch DEPARTURES từ API → Sync DB → Trả về kết quả từ DB
      */
-    @Cacheable(value = "departures", key = "#depIata")
     public List<Airline> fetchAndSaveDepartures(String depIata) {
         String cacheKey = CACHE_PREFIX + "dep:" + depIata;
 
@@ -62,13 +65,12 @@ public class AirlineService {
         redisService.set(cacheKey, result, CACHE_TTL, TimeUnit.MINUTES);
 
         // Trả về data từ DB sau khi sync (đảm bảo data nhất quán)
-        return airlineRepository.findByDepIata(depIata);
+        return result;
     }
 
     /**
      * Fetch ARRIVALS từ API → Sync DB → Trả về kết quả từ DB
      */
-    @Cacheable(value = "arrivals", key = "#arrIata")
     public List<Airline> fetchAndSaveArrivals(String arrIata) {
         String cacheKey = CACHE_PREFIX + "arr:" + arrIata;
 
@@ -96,8 +98,7 @@ public class AirlineService {
         String cacheKey = CACHE_PREFIX + "all:" + iata;
 
         // Try get from cache
-        Map<String, List<Airline>> cached =
-                (Map<String, List<Airline>>) redisService.get(cacheKey);
+        Map<String, List<Airline>> cached = (Map<String, List<Airline>>) redisService.get(cacheKey);
 
         if (cached != null) {
             System.out.println("✅ Cache HIT (ALL): " + cacheKey);
@@ -126,8 +127,7 @@ public class AirlineService {
     public Map<String, List<Airline>> getFlightsFromDatabase(String iata) {
         String cacheKey = CACHE_PREFIX + "db:" + iata;
 
-        Map<String, List<Airline>> cached =
-                (Map<String, List<Airline>>) redisService.get(cacheKey);
+        Map<String, List<Airline>> cached = (Map<String, List<Airline>>) redisService.get(cacheKey);
 
         if (cached != null) {
             return cached;
@@ -145,7 +145,6 @@ public class AirlineService {
     /**
      * Clear cache cho một airport
      */
-    @CacheEvict(value = {"departures", "arrivals"}, key = "#iata")
     public void clearCache(String iata) {
         redisService.deleteByPattern(CACHE_PREFIX + "*:" + iata);
         System.out.println("🗑️ Cleared cache for: " + iata);
@@ -154,20 +153,23 @@ public class AirlineService {
     /**
      * Clear ALL cache
      */
-    @CacheEvict(value = {"departures", "arrivals"}, allEntries = true)
     public void clearAllCache() {
         redisService.deleteByPattern(CACHE_PREFIX + "*");
         System.out.println("🗑️ Cleared ALL cache");
     }
 
-    /* ===========================================================
-       CORE SYNC LOGIC - Insert hoặc Update
-    ============================================================ */
+    /*
+     * ===========================================================
+     * CORE SYNC LOGIC - Insert hoặc Update
+     * ============================================================
+     */
 
+    @Transactional(isolation = Isolation.SERIALIZABLE)
     private void syncFlights(String url, boolean isDeparture) {
         // 1. Fetch từ API
         List<Airline> apiFlights = fetchFromApi(url);
-        if (apiFlights.isEmpty()) return;
+        if (apiFlights.isEmpty())
+            return;
 
         // 2. Lấy flight codes để query DB
         Set<String> flightCodes = apiFlights.stream()
@@ -188,12 +190,6 @@ public class AirlineService {
 
         // 5. Sync từng flight: Insert mới hoặc Update
         for (Airline apiF : apiFlights) {
-
-            // QUAN TRỌNG: Với ARRIVAL, set depTime = null để tránh conflict
-            if (!isDeparture) {
-                apiF.setDepTime(null);
-            }
-
             String key = uniqueKey(apiF, isDeparture);
 
             if (!dbMap.containsKey(key)) {
@@ -209,11 +205,29 @@ public class AirlineService {
                 }
             }
         }
+
+        // 6. Clean up: Xóa flights trong DB mà không còn trong API response
+        // Tạo set của API keys để so sánh
+        Set<String> apiKeys = apiFlights.stream()
+                .map(f -> uniqueKey(f, isDeparture))
+                .collect(Collectors.toSet());
+
+        // Xóa DB flights không có trong API
+        for (Airline dbFlight : dbFlights) {
+            String key = uniqueKey(dbFlight, isDeparture);
+            if (!apiKeys.contains(key)) {
+                // Flight này không còn trong API → DELETE
+                airlineRepository.delete(dbFlight);
+                System.out.println("🗑️ Deleted stale flight: " + dbFlight.getFlightIata());
+            }
+        }
     }
 
-    /* ===========================================================
-       FETCH FROM API
-    ============================================================ */
+    /*
+     * ===========================================================
+     * FETCH FROM API
+     * ============================================================
+     */
 
     private List<Airline> fetchFromApi(String url) {
         try {
@@ -224,8 +238,7 @@ public class AirlineService {
                 return Collections.emptyList();
             }
 
-            List<Map<String, Object>> data =
-                    (List<Map<String, Object>>) body.get("response");
+            List<Map<String, Object>> data = (List<Map<String, Object>>) body.get("response");
 
             return data.stream()
                     .map(this::mapToEntity)
@@ -237,9 +250,11 @@ public class AirlineService {
         }
     }
 
-    /* ===========================================================
-       BUILD URL
-    ============================================================ */
+    /*
+     * ===========================================================
+     * BUILD URL
+     * ============================================================
+     */
 
     private String buildUrl(String key, String value) {
         return UriComponentsBuilder.fromUriString(airlabsBaseUrl + "/schedules")
@@ -248,21 +263,28 @@ public class AirlineService {
                 .toUriString();
     }
 
-    /* ===========================================================
-       UNIQUE KEY - Phân biệt Departure vs Arrival
-    ============================================================ */
+    /*
+     * ===========================================================
+     * UNIQUE KEY - Phân biệt Departure vs Arrival
+     * ============================================================
+     */
 
     private String uniqueKey(Airline a, boolean isDeparture) {
-        // Departure: flight_iata + dep_time
-        // Arrival: flight_iata + arr_time
-        return isDeparture
-                ? a.getFlightIata() + "_" + a.getDepTime()
-                : a.getFlightIata() + "_" + a.getArrTime();
+        // Departure: flight_iata + dep_time (unique_departure constraint)
+        // Arrival: flight_iata + arr_time (unique_arrival constraint)
+        // KHÔNG được lẫn lộn vì DB có 2 unique constraints riêng biệt
+        if (isDeparture) {
+            return "DEP:" + a.getFlightIata() + "_" + a.getDepTime();
+        } else {
+            return "ARR:" + a.getFlightIata() + "_" + a.getArrTime();
+        }
     }
 
-    /* ===========================================================
-       CHECK CHANGES - Chỉ update khi có thay đổi thực sự
-    ============================================================ */
+    /*
+     * ===========================================================
+     * CHECK CHANGES - Chỉ update khi có thay đổi thực sự
+     * ============================================================
+     */
 
     private boolean isChanged(Airline old, Airline fresh) {
         return !Objects.equals(old.getDepGate(), fresh.getDepGate()) ||
@@ -273,9 +295,11 @@ public class AirlineService {
                 !Objects.equals(old.getDelayed(), fresh.getDelayed());
     }
 
-    /* ===========================================================
-       UPDATE ENTITY - Chỉ update các trường có thể thay đổi
-    ============================================================ */
+    /*
+     * ===========================================================
+     * UPDATE ENTITY - Chỉ update các trường có thể thay đổi
+     * ============================================================
+     */
 
     private void updateEntity(Airline old, Airline fresh) {
         old.setDepGate(fresh.getDepGate());
@@ -287,25 +311,46 @@ public class AirlineService {
         // Không update dep_time, arr_time, flight_iata (là key)
     }
 
-    /* ===========================================================
-       MAP JSON → ENTITY
-    ============================================================ */
+    /*
+     * ===========================================================
+     * MAP JSON → ENTITY
+     * ============================================================
+     */
 
     private Airline mapToEntity(Map<String, Object> m) {
         try {
+            // Validate critical fields
+            String flightIata = (String) m.get("flight_iata");
+            String depIata = (String) m.get("dep_iata");
+            String arrIata = (String) m.get("arr_iata");
+
+            // Reject if critical fields are null
+            if (flightIata == null || flightIata.isEmpty()) {
+                System.err.println("[Validation error] flight_iata is null or empty");
+                return null;
+            }
+            if (depIata == null || depIata.isEmpty()) {
+                System.err.println("[Validation error] dep_iata is null or empty for flight: " + flightIata);
+                return null;
+            }
+            if (arrIata == null || arrIata.isEmpty()) {
+                System.err.println("[Validation error] arr_iata is null or empty for flight: " + flightIata);
+                return null;
+            }
+
             Airline a = new Airline();
 
             a.setAirlineIata((String) m.get("airline_iata"));
-            a.setFlightIata((String) m.get("flight_iata"));
+            a.setFlightIata(flightIata);
             a.setFlightNumber((String) m.get("flight_number"));
 
-            a.setDepIata((String) m.get("dep_iata"));
+            a.setDepIata(depIata);
             a.setDepTerminal((String) m.get("dep_terminal"));
             a.setDepGate((String) m.get("dep_gate"));
             a.setDepTime((String) m.get("dep_time"));
             a.setDepActual((String) m.get("dep_actual"));
 
-            a.setArrIata((String) m.get("arr_iata"));
+            a.setArrIata(arrIata);
             a.setArrTerminal((String) m.get("arr_terminal"));
             a.setArrGate((String) m.get("arr_gate"));
             a.setArrTime((String) m.get("arr_time"));

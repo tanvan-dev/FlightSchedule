@@ -4,6 +4,8 @@ import com.tanvan.ecommerce.entity.Airline;
 import com.tanvan.ecommerce.repository.AirlineRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -19,6 +21,7 @@ import java.util.stream.Collectors;
 public class AirlineService {
 
     private final AirlineRepository airlineRepository;
+    private final RedisService redisService;
     private final RestTemplate restTemplate = new RestTemplate();
 
     @Value("${airlabs.api.key}")
@@ -49,13 +52,27 @@ public class AirlineService {
         return airlineRepository.findByArrIata(arrIata);
     }
 
+//    @Cacheable(value = "flights", key = "#iata")
     public Map<String, List<Airline>> fetchAndSaveAllFlights(String iata) {
+
+        String redisKey = "FLIGHTS:" + iata.toUpperCase();
+
+        // 1️⃣ Check Redis trước
+        Object cached = redisService.getFlights(redisKey);
+        if (cached != null) {
+            return (Map<String, List<Airline>>) cached;
+        }
+
+        // 2️⃣ Nếu không có → gọi API + sync DB
         List<Airline> departures = fetchAndSaveDepartures(iata);
         List<Airline> arrivals = fetchAndSaveArrivals(iata);
 
         Map<String, List<Airline>> result = new HashMap<>();
         result.put("departures", departures);
         result.put("arrivals", arrivals);
+
+        // 3️⃣ Lưu vào Redis
+        redisService.saveFlights(redisKey, result);
 
         return result;
     }
@@ -67,7 +84,7 @@ public class AirlineService {
      */
 
     @Transactional(isolation = Isolation.SERIALIZABLE)
-    private void syncFlights(String url, boolean isDeparture) {
+    protected void syncFlights(String url, boolean isDeparture) {
         List<Airline> apiFlights = fetchFromApi(url);
         if (apiFlights.isEmpty()) return;
 
@@ -79,8 +96,6 @@ public class AirlineService {
 
         // Load từ DB
         List<Airline> dbFlights = airlineRepository.findByFlightIataIn(flightCodes);
-
-        // Tạo map lookup
         Map<String, Airline> dbMap = dbFlights.stream()
                 .collect(Collectors.toMap(
                         f -> uniqueKey(f, isDeparture),
@@ -92,13 +107,30 @@ public class AirlineService {
         for (Airline apiF : apiFlights) {
             String key = uniqueKey(apiF, isDeparture);
 
-            if (!dbMap.containsKey(key)) {
-                airlineRepository.save(apiF);
-            } else {
-                Airline existing = dbMap.get(key);
-                if (isChanged(existing, apiF)) {
-                    updateEntity(existing, apiF);
-                    airlineRepository.save(existing);
+            try {
+                if (!dbMap.containsKey(key)) {
+                    airlineRepository.save(apiF);
+                } else {
+                    Airline existing = dbMap.get(key);
+                    if (isChanged(existing, apiF)) {
+                        updateEntity(existing, apiF);
+                        airlineRepository.save(existing);
+                    }
+                }
+            } catch (DataIntegrityViolationException e) {
+                // Handle duplicate constraint (race condition)
+                if (isDeparture) {
+                    Airline existing = airlineRepository.findByFlightIataAndDepTime(apiF.getFlightIata(), apiF.getDepTime());
+                    if (existing != null && isChanged(existing, apiF)) {
+                        updateEntity(existing, apiF);
+                        airlineRepository.save(existing);
+                    }
+                } else {
+                    Airline existing = airlineRepository.findByFlightIataAndArrTime(apiF.getFlightIata(), apiF.getArrTime());
+                    if (existing != null && isChanged(existing, apiF)) {
+                        updateEntity(existing, apiF);
+                        airlineRepository.save(existing);
+                    }
                 }
             }
         }

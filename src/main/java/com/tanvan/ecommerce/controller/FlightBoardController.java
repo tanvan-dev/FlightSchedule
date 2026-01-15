@@ -7,7 +7,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 @Controller
 public class FlightBoardController {
 
-    @GetMapping("/flight-board")
+    @GetMapping("/")
     public String flightBoard() {
         return "FlightBoard"; // không cần .html
     }

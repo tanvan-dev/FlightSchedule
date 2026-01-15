@@ -19,4 +19,8 @@ public interface AirlineRepository extends JpaRepository<Airline, Long> {
     List<Airline> findByDepIataOrArrIata(String depIata, String arrIata);
 
     List<Airline> findByFlightIataIn(Set<String> flightIatas);
+
+    Airline findByFlightIataAndDepTime(String flightIata, String depTime);
+
+    Airline findByFlightIataAndArrTime(String flightIata, String arrTime);
 }

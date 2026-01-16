@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -82,7 +83,7 @@ public class AirlineService {
 
         // Lấy từ DB
         List<Airline> departures = airlineRepository.findByDepIata(iata);
-        List<Airline> arrivals = airlineRepository.findByArrIata(iata);
+        List<Airline> arrivals   = airlineRepository.findByArrIata(iata);
 
         Map<String, List<Airline>> result = new HashMap<>();
         result.put("departures", departures);
@@ -106,7 +107,7 @@ public class AirlineService {
     public void refreshAllFlightsAsync(String iata) {
         String lockKey = "LOCK:FLIGHTS:" + iata.toUpperCase();
         String token = redisService.acquireLock(lockKey, 60);
-        if (token != null) {
+        if (token != null) { // Giả sử RedisService có phương thức acquireLock (sử dụng SETNX với expire)
             try {
                 log.info("🔄 Background refresh started: FLIGHTS:{}", iata);
                 String depUrl = buildUrl("dep_iata", iata);
@@ -118,7 +119,7 @@ public class AirlineService {
                 CompletableFuture.allOf(depFuture, arrFuture).join();
 
                 List<Airline> departures = airlineRepository.findByDepIata(iata);
-                List<Airline> arrivals = airlineRepository.findByArrIata(iata);
+                List<Airline> arrivals   = airlineRepository.findByArrIata(iata);
 
                 Map<String, List<Airline>> result = new HashMap<>();
                 result.put("departures", departures);
@@ -131,7 +132,7 @@ public class AirlineService {
             } catch (Exception e) {
                 log.error("❌ Background refresh failed: FLIGHTS:{} - {}", iata, e.getMessage(), e);
             } finally {
-                redisService.releaseLock(lockKey, token);
+                redisService.releaseLock(lockKey, token); // Giả sử có releaseLock
             }
         } else {
             log.debug("🔒 Lock already held for FLIGHTS:{}", iata); // Tránh refresh trùng lặp

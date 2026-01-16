@@ -50,15 +50,15 @@ public class AirlineController {
 //        return ResponseEntity.ok(airlineService.getFlightsFromDatabase(iata));
 //    }
 
-    @GetMapping("/departures")
-    public ResponseEntity<List<Airline>> getDepartures(@RequestParam String iata) {
-        return ResponseEntity.ok(airlineService.fetchAndSaveDepartures(iata));
-    }
-
-    @GetMapping("/arrivals")
-    public ResponseEntity<List<Airline>> getArrivals(@RequestParam String iata) {
-        return ResponseEntity.ok(airlineService.fetchAndSaveArrivals(iata));
-    }
+//    @GetMapping("/departures")
+//    public ResponseEntity<List<Airline>> getDepartures(@RequestParam String iata) {
+//        return ResponseEntity.ok(airlineService.fetchAndSaveDepartures(iata));
+//    }
+//
+//    @GetMapping("/arrivals")
+//    public ResponseEntity<List<Airline>> getArrivals(@RequestParam String iata) {
+//        return ResponseEntity.ok(airlineService.fetchAndSaveArrivals(iata));
+//    }
 
     /**
      * ✅ CLEAR CACHE cho một airport

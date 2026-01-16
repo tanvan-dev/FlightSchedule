@@ -15,6 +15,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -45,100 +46,6 @@ public class AirlineService {
      */
 
     /**
-     * Fetch departures with intelligent cache strategy
-     * 0-30s: Return fresh cache
-     * 30-120s: Return stale cache + background refresh
-     * >120s: Fetch new from API
-     */
-//    public List<Airline> fetchAndSaveDepartures(String depIata) {
-//        String redisKey = "DEPARTURES:" + depIata.toUpperCase();
-//
-//        // 1️⃣ Check Redis with timestamp
-//        CachedData cachedData = redisService.getFlightsWithTimestamp(redisKey);
-//
-//        if (cachedData != null) {
-//            long ageSeconds = cachedData.getAgeSeconds();
-//
-//            // Fresh cache (0-30s) ✅
-//            if (ageSeconds < STALE_THRESHOLD_SECONDS) {
-//                log.info("✅ Cache HIT (fresh): DEPARTURES:{} - age: {}s", depIata, ageSeconds);
-//                return extractDepartures(cachedData.getData());
-//            }
-//
-//            // Stale cache (30-120s) ⚡ - return + refresh background
-//            if (ageSeconds < CACHE_TTL_SECONDS) {
-//                log.info("⚡ Cache HIT (stale): DEPARTURES:{} - age: {}s, refreshing background", depIata, ageSeconds);
-//                refreshDeparturesAsync(depIata);
-//                return extractDepartures(cachedData.getData());
-//            }
-//
-//            // Expired cache (>120s) 🔄 - delete and fetch fresh
-//            log.info("❌ Cache EXPIRED: DEPARTURES:{} - age: {}s, fetching new", depIata, ageSeconds);
-//            redisService.deleteFlights(redisKey);
-//        }
-//
-//        // 2️⃣ Cache MISS or EXPIRED → Sync with DB
-//        log.info("🔄 Cache MISS: DEPARTURES:{} - fetching from API", depIata);
-//        String url = buildUrl("dep_iata", depIata);
-//        syncFlights(url, true);
-//
-//        // 3️⃣ Save to cache
-//        List<Airline> departures = airlineRepository.findByDepIata(depIata);
-//        Map<String, List<Airline>> cacheData = new HashMap<>();
-//        cacheData.put("departures", departures);
-//        redisService.saveFlightsWithTTL(redisKey, cacheData, CACHE_TTL_SECONDS);
-//
-//        return departures;
-//    }
-
-    /**
-     * Fetch arrivals with intelligent cache strategy
-     * 0-30s: Return fresh cache
-     * 30-120s: Return stale cache + background refresh
-     * >120s: Fetch new from API
-     */
-//    public List<Airline> fetchAndSaveArrivals(String arrIata) {
-//        String redisKey = "ARRIVALS:" + arrIata.toUpperCase();
-//
-//        // 1️⃣ Check Redis with timestamp
-//        CachedData cachedData = redisService.getFlightsWithTimestamp(redisKey);
-//
-//        if (cachedData != null) {
-//            long ageSeconds = cachedData.getAgeSeconds();
-//
-//            // Fresh cache (0-30s) ✅
-//            if (ageSeconds < STALE_THRESHOLD_SECONDS) {
-//                log.info("✅ Cache HIT (fresh): ARRIVALS:{} - age: {}s", arrIata, ageSeconds);
-//                return extractArrivals(cachedData.getData());
-//            }
-//
-//            // Stale cache (30-120s) ⚡ - return + refresh background
-//            if (ageSeconds < CACHE_TTL_SECONDS) {
-//                log.info("⚡ Cache HIT (stale): ARRIVALS:{} - age: {}s, refreshing background", arrIata, ageSeconds);
-//                refreshArrivalsAsync(arrIata);
-//                return extractArrivals(cachedData.getData());
-//            }
-//
-//            // Expired cache (>120s) 🔄 - delete and fetch fresh
-//            log.info("❌ Cache EXPIRED: ARRIVALS:{} - age: {}s, fetching new", arrIata, ageSeconds);
-//            redisService.deleteFlights(redisKey);
-//        }
-//
-//        // 2️⃣ Cache MISS or EXPIRED → Sync with DB
-//        log.info("🔄 Cache MISS: ARRIVALS:{} - fetching from API", arrIata);
-//        String url = buildUrl("arr_iata", arrIata);
-//        syncFlights(url, false);
-//
-//        // 3️⃣ Save to cache
-//        List<Airline> arrivals = airlineRepository.findByArrIata(arrIata);
-//        Map<String, List<Airline>> cacheData = new HashMap<>();
-//        cacheData.put("arrivals", arrivals);
-//        redisService.saveFlightsWithTTL(redisKey, cacheData, CACHE_TTL_SECONDS);
-//
-//        return arrivals;
-//    }
-
-    /**
      * Fetch both departures and arrivals with intelligent cache strategy
      */
     public Map<String, List<Airline>> fetchAndSaveAllFlights(String iata) {
@@ -148,11 +55,11 @@ public class AirlineService {
         if (cached != null) {
             long age = cached.getAgeSeconds();
             if (age < STALE_THRESHOLD_SECONDS) {
-                log.info("✅ Fresh cache: {}", redisKey);
+                log.debug("✅ Fresh cache: {}", redisKey); // Giảm mức log xuống debug để ít overhead hơn
                 return cached.getData();
             }
             if (age < CACHE_TTL_SECONDS) {
-                log.info("⚡ Stale cache → background refresh: {}", redisKey);
+                log.debug("⚡ Stale cache → background refresh: {}", redisKey);
                 refreshAllFlightsAsync(iata);
                 return cached.getData();
             }
@@ -161,18 +68,21 @@ public class AirlineService {
         }
 
         // Cache miss / expired → fetch mới
-        log.info("🔄 Cache miss: {}", redisKey);
+        log.info("🔄 Cache miss: {}", redisKey); // Giữ info cho cache miss vì quan trọng
 
         String depUrl = buildUrl("dep_iata", iata);
         String arrUrl = buildUrl("arr_iata", iata);
 
-        // Gọi đồng bộ cả hai
-        syncFlights(depUrl, true);
-        syncFlights(arrUrl, false);
+        // Gọi song song hai syncFlights bằng CompletableFuture để giảm thời gian chờ
+        CompletableFuture<Void> depFuture = CompletableFuture.runAsync(() -> syncFlights(depUrl, true));
+        CompletableFuture<Void> arrFuture = CompletableFuture.runAsync(() -> syncFlights(arrUrl, false));
+
+        // Chờ cả hai hoàn thành
+        CompletableFuture.allOf(depFuture, arrFuture).join();
 
         // Lấy từ DB
         List<Airline> departures = airlineRepository.findByDepIata(iata);
-        List<Airline> arrivals   = airlineRepository.findByArrIata(iata);
+        List<Airline> arrivals = airlineRepository.findByArrIata(iata);
 
         Map<String, List<Airline>> result = new HashMap<>();
         result.put("departures", departures);
@@ -190,77 +100,41 @@ public class AirlineService {
      */
 
     /**
-     * Background refresh for departures (non-blocking)
-     */
-//    @Async
-//    public void refreshDeparturesAsync(String depIata) {
-//        try {
-//            log.info("🔄 Background refresh started: DEPARTURES:{}", depIata);
-//            String url = buildUrl("dep_iata", depIata);
-//            syncFlights(url, true);
-//
-//            // Update cache
-//            List<Airline> departures = airlineRepository.findByDepIata(depIata);
-//            Map<String, List<Airline>> cacheData = new HashMap<>();
-//            cacheData.put("departures", departures);
-//            String redisKey = "DEPARTURES:" + depIata.toUpperCase();
-//            redisService.saveFlightsWithTTL(redisKey, cacheData, CACHE_TTL_SECONDS);
-//
-//            log.info("✅ Background refresh completed: DEPARTURES:{}", depIata);
-//        } catch (Exception e) {
-//            log.error("❌ Background refresh failed: DEPARTURES:{} - {}", depIata, e.getMessage(), e);
-//        }
-//    }
-
-    /**
-     * Background refresh for arrivals (non-blocking)
-     */
-//    @Async
-//    public void refreshArrivalsAsync(String arrIata) {
-//        try {
-//            log.info("🔄 Background refresh started: ARRIVALS:{}", arrIata);
-//            String url = buildUrl("arr_iata", arrIata);
-//            syncFlights(url, false);
-//
-//            // Update cache
-//            List<Airline> arrivals = airlineRepository.findByArrIata(arrIata);
-//            Map<String, List<Airline>> cacheData = new HashMap<>();
-//            cacheData.put("arrivals", arrivals);
-//            String redisKey = "ARRIVALS:" + arrIata.toUpperCase();
-//            redisService.saveFlightsWithTTL(redisKey, cacheData, CACHE_TTL_SECONDS);
-//
-//            log.info("✅ Background refresh completed: ARRIVALS:{}", arrIata);
-//        } catch (Exception e) {
-//            log.error("❌ Background refresh failed: ARRIVALS:{} - {}", arrIata, e.getMessage(), e);
-//        }
-//    }
-
-    /**
      * Background refresh for all flights (non-blocking)
      */
     @Async
     public void refreshAllFlightsAsync(String iata) {
-        try {
-            log.info("🔄 Background refresh started: FLIGHTS:{}", iata);
-            String depUrl = buildUrl("dep_iata", iata);
-            String arrUrl = buildUrl("arr_iata", iata);
+        String lockKey = "LOCK:FLIGHTS:" + iata.toUpperCase();
+        String token = redisService.acquireLock(lockKey, 60);
+        if (token != null) {
+            try {
+                log.info("🔄 Background refresh started: FLIGHTS:{}", iata);
+                String depUrl = buildUrl("dep_iata", iata);
+                String arrUrl = buildUrl("arr_iata", iata);
 
-            syncFlights(depUrl, true);
-            syncFlights(arrUrl, false);
+                // Gọi song song trong async để tối ưu
+                CompletableFuture<Void> depFuture = CompletableFuture.runAsync(() -> syncFlights(depUrl, true));
+                CompletableFuture<Void> arrFuture = CompletableFuture.runAsync(() -> syncFlights(arrUrl, false));
+                CompletableFuture.allOf(depFuture, arrFuture).join();
 
-            List<Airline> departures = airlineRepository.findByDepIata(iata);
-            List<Airline> arrivals   = airlineRepository.findByArrIata(iata);
+                List<Airline> departures = airlineRepository.findByDepIata(iata);
+                List<Airline> arrivals = airlineRepository.findByArrIata(iata);
 
-            Map<String, List<Airline>> result = new HashMap<>();
-            result.put("departures", departures);
-            result.put("arrivals", arrivals);
+                Map<String, List<Airline>> result = new HashMap<>();
+                result.put("departures", departures);
+                result.put("arrivals", arrivals);
 
-            String redisKey = "FLIGHTS:" + iata.toUpperCase();
-            redisService.saveFlightsWithTTL(redisKey, result, CACHE_TTL_SECONDS);
+                String redisKey = "FLIGHTS:" + iata.toUpperCase();
+                redisService.saveFlightsWithTTL(redisKey, result, CACHE_TTL_SECONDS);
 
-            log.info("✅ Background refresh completed: FLIGHTS:{}", iata);
-        } catch (Exception e) {
-            log.error("❌ Background refresh failed: FLIGHTS:{} - {}", iata, e.getMessage(), e);
+                log.info("✅ Background refresh completed: FLIGHTS:{}", iata);
+            } catch (Exception e) {
+                log.error("❌ Background refresh failed: FLIGHTS:{} - {}", iata, e.getMessage(), e);
+            } finally {
+                redisService.releaseLock(lockKey, token);
+            }
+        } else {
+            log.debug("🔒 Lock already held for FLIGHTS:{}", iata); // Tránh refresh trùng lặp
         }
     }
 
@@ -270,68 +144,76 @@ public class AirlineService {
      * ============================================================
      */
 
-    @Transactional(isolation = Isolation.SERIALIZABLE)
+    @Transactional(isolation = Isolation.READ_COMMITTED) // Giảm isolation xuống READ_COMMITTED để giảm khóa, tăng concurrency
     protected void syncFlights(String url, boolean isDeparture) {
         List<Airline> apiFlights = fetchFromApi(url);
         if (apiFlights.isEmpty()) return;
 
-        // Lấy các flight code để query DB
-        Set<String> flightCodes = apiFlights.stream()
-                .map(Airline::getFlightIata)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
+        // Lấy các flight code để query DB (tối ưu bằng Set để tránh duplicate)
+        Set<String> flightCodes = new HashSet<>();
+        for (Airline apiF : apiFlights) {
+            if (apiF.getFlightIata() != null) {
+                flightCodes.add(apiF.getFlightIata());
+            }
+        }
 
         // Load từ DB
         List<Airline> dbFlights = airlineRepository.findByFlightIataIn(flightCodes);
-        Map<String, Airline> dbMap = dbFlights.stream()
-                .collect(Collectors.toMap(
-                        f -> uniqueKey(f, isDeparture),
-                        f -> f,
-                        (a, b) -> a
-                ));
+        Map<String, Airline> dbMap = new HashMap<>(dbFlights.size());
+        for (Airline dbF : dbFlights) {
+            String key = uniqueKey(dbF, isDeparture);
+            dbMap.put(key, dbF);
+        }
 
-        // Insert hoặc Update
+        // Thu thập batch cho insert/update/delete để sử dụng saveAll/deleteAll
+        List<Airline> toInsert = new ArrayList<>();
+        List<Airline> toUpdate = new ArrayList<>();
+        Set<String> apiKeys = new HashSet<>(apiFlights.size());
+
         for (Airline apiF : apiFlights) {
             String key = uniqueKey(apiF, isDeparture);
+            apiKeys.add(key);
 
             try {
                 if (!dbMap.containsKey(key)) {
-                    airlineRepository.save(apiF);
+                    toInsert.add(apiF);
                 } else {
                     Airline existing = dbMap.get(key);
                     if (isChanged(existing, apiF)) {
                         updateEntity(existing, apiF);
-                        airlineRepository.save(existing);
+                        toUpdate.add(existing);
                     }
                 }
             } catch (DataIntegrityViolationException e) {
-                // Handle duplicate constraint (race condition)
-                if (isDeparture) {
-                    Airline existing = airlineRepository.findByFlightIataAndDepTime(apiF.getFlightIata(), apiF.getDepTime());
-                    if (existing != null && isChanged(existing, apiF)) {
-                        updateEntity(existing, apiF);
-                        airlineRepository.save(existing);
-                    }
-                } else {
-                    Airline existing = airlineRepository.findByFlightIataAndArrTime(apiF.getFlightIata(), apiF.getArrTime());
-                    if (existing != null && isChanged(existing, apiF)) {
-                        updateEntity(existing, apiF);
-                        airlineRepository.save(existing);
-                    }
+                // Handle duplicate constraint (race condition) - ít xảy ra hơn với lock
+                Airline existing = isDeparture ?
+                        airlineRepository.findByFlightIataAndDepTime(apiF.getFlightIata(), apiF.getDepTime()) :
+                        airlineRepository.findByFlightIataAndArrTime(apiF.getFlightIata(), apiF.getArrTime());
+                if (existing != null && isChanged(existing, apiF)) {
+                    updateEntity(existing, apiF);
+                    toUpdate.add(existing);
                 }
             }
         }
 
-        // Xóa flight không còn trong API
-        Set<String> apiKeys = apiFlights.stream()
-                .map(f -> uniqueKey(f, isDeparture))
-                .collect(Collectors.toSet());
+        // Batch save
+        if (!toInsert.isEmpty()) {
+            airlineRepository.saveAll(toInsert);
+        }
+        if (!toUpdate.isEmpty()) {
+            airlineRepository.saveAll(toUpdate);
+        }
 
+        // Xóa flight không còn trong API
+        List<Airline> toDelete = new ArrayList<>();
         for (Airline dbF : dbFlights) {
             String key = uniqueKey(dbF, isDeparture);
             if (!apiKeys.contains(key)) {
-                airlineRepository.delete(dbF);
+                toDelete.add(dbF);
             }
+        }
+        if (!toDelete.isEmpty()) {
+            airlineRepository.deleteAll(toDelete);
         }
     }
 
@@ -352,6 +234,7 @@ public class AirlineService {
 
             List<Map<String, Object>> data = (List<Map<String, Object>>) body.get("response");
 
+            // Tối ưu stream bằng parallel nếu dataset lớn, nhưng giữ sequential vì thường không quá lớn
             return data.stream()
                     .map(this::mapToEntity)
                     .filter(Objects::nonNull)
@@ -390,17 +273,24 @@ public class AirlineService {
 
     /*
      * ===========================================================
-     * DETECT CHANGES
+     * DETECT CHANGES - Sử dụng hash thay vì so sánh từng trường
      * ============================================================
      */
 
     private boolean isChanged(Airline old, Airline fresh) {
-        return !Objects.equals(old.getDepGate(), fresh.getDepGate()) ||
-                !Objects.equals(old.getDepActual(), fresh.getDepActual()) ||
-                !Objects.equals(old.getArrGate(), fresh.getArrGate()) ||
-                !Objects.equals(old.getArrActual(), fresh.getArrActual()) ||
-                !Objects.equals(old.getStatus(), fresh.getStatus()) ||
-                !Objects.equals(old.getDelayed(), fresh.getDelayed());
+        return computeChangeableHash(old) != computeChangeableHash(fresh);
+    }
+
+    private int computeChangeableHash(Airline a) {
+        // Sử dụng Objects.hash cho các trường có thể thay đổi, hiệu quả hơn so sánh từng cái
+        return Objects.hash(
+                a.getDepGate(),
+                a.getDepActual(),
+                a.getArrGate(),
+                a.getArrActual(),
+                a.getStatus(),
+                a.getDelayed()
+        );
     }
 
     /*
@@ -466,34 +356,6 @@ public class AirlineService {
             return null;
         }
     }
-
-    /*
-     * ===========================================================
-     * HELPER: Extract data from cache
-     * ============================================================
-     */
-
-//    private List<Airline> extractDepartures(Map<String, List<Airline>> data) {
-//        List<?> deps = data.get("departures");
-//        if (deps != null && !deps.isEmpty()) {
-//            return (List<Airline>) deps;
-//        }
-//        return Collections.emptyList();
-//    }
-
-//    private List<Airline> extractArrivals(Map<String, List<Airline>> data) {
-//        List<?> arrs = data.get("arrivals");
-//        if (arrs != null && !arrs.isEmpty()) {
-//            return (List<Airline>) arrs;
-//        }
-//        return Collections.emptyList();
-//    }
-
-    /*
-     * ===========================================================
-     * CACHED DATA CLASS
-     * ============================================================
-     */
 
     /**
      * Wrapper class for cached data with timestamp

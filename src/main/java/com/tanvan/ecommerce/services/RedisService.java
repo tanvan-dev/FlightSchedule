@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -114,6 +115,41 @@ public class RedisService {
     public void clearAllFlights() {
         try {
             redisTemplate.getConnectionFactory().getConnection().flushAll();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Acquire a distributed lock using Redis SETNX with expiration.
+     * Returns a unique token if lock is acquired, null otherwise.
+     * @param key The lock key
+     * @param expireSeconds Expiration time in seconds
+     * @return Token if acquired, null if not
+     */
+    public String acquireLock(String key, int expireSeconds) {
+        try {
+            String token = UUID.randomUUID().toString();
+            Boolean success = redisTemplate.opsForValue().setIfAbsent(key, token, expireSeconds, TimeUnit.SECONDS);
+            return (success != null && success) ? token : null;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
+     * Release the lock only if the current value matches the provided token.
+     * This prevents releasing locks held by others.
+     * @param key The lock key
+     * @param token The token from acquireLock
+     */
+    public void releaseLock(String key, String token) {
+        try {
+            Object currentValue = redisTemplate.opsForValue().get(key);
+            if (token.equals(currentValue)) {
+                redisTemplate.delete(key);
+            }
         } catch (Exception e) {
             e.printStackTrace();
         }

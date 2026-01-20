@@ -164,6 +164,7 @@
                 </configuration>
             </plugin>
         </plugins>
+        <finalName>tanvan</finalName>
     </build>
 
 </project>

@@ -39,9 +39,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: |
-            tanvanpham/tanvan:latest
-            tanvanpham/tanvan:${{ github.sha }}
+          tags: latest
 
       - name: Image digest
         run: echo "Image pushed successfully to Docker Hub!"

@@ -39,7 +39,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          tags: latest
+          tags: tanvanpham/tanvan:latest
 
       - name: Image digest
         run: echo "Image pushed successfully to Docker Hub!"

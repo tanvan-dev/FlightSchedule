@@ -51,7 +51,7 @@ jobs:
       # 🚀 TRIGGER WEBHOOK AFTER BUILD SUCCESS
       - name: Trigger EC2 Deployment
         run: |
-          curl -X POST http://3.88.65.140:9000/hooks/tan-deploy \
+          curl -X POST http://3.88.65.140:9001/hooks/tan-deploy \
             -H "Content-Type: application/json" \
             -H "X-Hub-Signature-256: sha256=$(echo -n '${{ toJson(github) }}' | openssl dgst -sha256 -hmac '${{ secrets.WEBHOOK_SECRET }}' | cut -d' ' -f2)" \
             -d '{
